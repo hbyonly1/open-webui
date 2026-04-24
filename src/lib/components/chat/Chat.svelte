@@ -106,6 +106,7 @@
 	import NotificationToast from '../NotificationToast.svelte';
 	import Spinner from '../common/Spinner.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
+	import Switch from '$lib/components/common/Switch.svelte';
 	import Sidebar from '../icons/Sidebar.svelte';
 	import Image from '../common/Image.svelte';
 	import { getBanners } from '$lib/apis/configs';
@@ -176,9 +177,74 @@
 	let files = [];
 	let params = {};
 
+	type ReasoningEffortOption = 'xhigh' | 'high' | 'medium' | 'low';
+	const REASONING_EFFORT_OPTIONS: ReasoningEffortOption[] = ['xhigh', 'high', 'medium', 'low'];
+
+	let reasoningEffortEnabled = false;
+	let reasoningEffortSelected: ReasoningEffortOption = 'medium';
+	let effectiveReasoningEffort: string | null = null;
+
+	let persistReasoningEffortTimeout: ReturnType<typeof setTimeout> | null = null;
+
+	const _hasOwn = (obj: any, key: string) => Object.prototype.hasOwnProperty.call(obj ?? {}, key);
+
+	// Keep the UI in sync when switching chats (params reassigned) or user settings change.
+	// Note: dependencies must be explicit for Svelte reactivity (don't hide them in helper functions).
+	$: effectiveReasoningEffort =
+		_hasOwn(params, 'reasoning_effort')
+			? ((params as any)?.reasoning_effort ?? null)
+			: (($settings?.params?.reasoning_effort as any) ?? null);
+
+	$: reasoningEffortEnabled =
+		effectiveReasoningEffort !== null &&
+		effectiveReasoningEffort !== undefined &&
+		effectiveReasoningEffort !== '';
+
+	$: if (
+		typeof effectiveReasoningEffort === 'string' &&
+		REASONING_EFFORT_OPTIONS.includes(effectiveReasoningEffort as ReasoningEffortOption)
+	) {
+		reasoningEffortSelected = effectiveReasoningEffort as ReasoningEffortOption;
+	}
+
+	const persistReasoningEffort = () => {
+		if (persistReasoningEffortTimeout) clearTimeout(persistReasoningEffortTimeout);
+		persistReasoningEffortTimeout = setTimeout(async () => {
+			persistReasoningEffortTimeout = null;
+			// No persistence for temporary/local chats (they are intentionally ephemeral).
+			if ($temporaryChatEnabled) return;
+			if (!$chatId || $chatId.startsWith('local:')) return;
+			if (!chat) return;
+
+			await updateChatById(localStorage.token, $chatId, { params }).catch(() => {});
+		}, 400);
+	};
+
+	const setReasoningEffortEnabled = (enabled: boolean) => {
+		reasoningEffortEnabled = enabled;
+		params = {
+			...params,
+			// When disabled, set to null to explicitly remove it from the provider payload
+			// (and also override any user-level default).
+			reasoning_effort: enabled ? reasoningEffortSelected : null
+		};
+		persistReasoningEffort();
+	};
+
+	const setReasoningEffortSelected = (opt: ReasoningEffortOption) => {
+		reasoningEffortSelected = opt;
+		if (!reasoningEffortEnabled) return;
+		params = { ...params, reasoning_effort: opt };
+		persistReasoningEffort();
+	};
+
 	$: if (chatIdProp) {
 		navigateHandler();
 	}
+
+	onDestroy(() => {
+		if (persistReasoningEffortTimeout) clearTimeout(persistReasoningEffortTimeout);
+	});
 
 	const navigateHandler = async () => {
 		// Mark the outgoing chat as read before loading the new one.
@@ -2939,6 +3005,43 @@
 							</div>
 
 							<div class=" pb-2 {dragged ? 'z-0' : 'z-10'}">
+								{#if $user?.role === 'admin' || ($user?.permissions.chat?.params ?? true)}
+									<div class="px-3 pb-1 select-none">
+										<div class="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+											<div class="shrink-0">
+												{$i18n.t('Reasoning Effort')}
+											</div>
+
+											<div class="flex-1 flex justify-center">
+												<div
+													class="inline-flex rounded-md border border-gray-200/70 dark:border-gray-700/40 bg-gray-50/60 dark:bg-gray-900/30 overflow-hidden"
+												>
+													{#each REASONING_EFFORT_OPTIONS as opt (opt)}
+														<button
+															type="button"
+															aria-pressed={reasoningEffortSelected === opt}
+															class="px-2 py-1 text-[11px] uppercase tracking-wide transition-colors {reasoningEffortSelected ===
+															opt
+																? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
+																: 'text-gray-600 dark:text-gray-300 hover:bg-white/70 dark:hover:bg-gray-800/60'}"
+															on:click={() => setReasoningEffortSelected(opt)}
+														>
+															{opt}
+														</button>
+													{/each}
+												</div>
+											</div>
+
+											<div class="shrink-0">
+												<Switch
+													state={reasoningEffortEnabled}
+													on:change={(e) => setReasoningEffortEnabled(e.detail)}
+												/>
+											</div>
+										</div>
+									</div>
+								{/if}
+
 								<MessageInput
 									bind:this={messageInput}
 									{history}
